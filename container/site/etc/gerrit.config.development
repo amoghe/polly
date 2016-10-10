@@ -1,0 +1,23 @@
+[gerrit]
+	basePath = git
+	canonicalWebUrl = http://172.17.0.2:8080/
+[database]
+	type = h2
+	database = /home/gerrit/site/db/ReviewDB
+[index]
+	type = LUCENE
+[auth]
+	type = DEVELOPMENT_BECOME_ANY_ACCOUNT
+[receive]
+	enableSignedPush = false
+[sendemail]
+	smtpServer = localhost
+[container]
+	user = gerrit
+	javaHome = /usr/lib/jvm/java-7-openjdk-amd64/jre
+[sshd]
+	listenAddress = *:29418
+[httpd]
+	listenUrl = proxy-http://*:8080/
+[cache]
+	directory = cache
