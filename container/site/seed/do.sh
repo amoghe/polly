@@ -24,16 +24,20 @@ function PUT_api_call() {
     fi
 
     curl -X PUT \
-	 --digest --user "$GERRIT_ADMIN_USER:$GERRIT_ADMIN_PASS" \
-	 --header "Content-Type: application/json" \
-	 -d@$SEED_DIR/$seedfile \
-	 http://localhost:8080/a/$api_path
+        --silent \
+	--digest --user "$GERRIT_ADMIN_USER:$GERRIT_ADMIN_PASS" \
+	--header "Content-Type: application/json" \
+	-d@$SEED_DIR/$seedfile \
+	http://localhost:8080/a/$api_path
 }
 
 # main driver function
 function main() {
-    echo "Adding default group"
-    PUT_api_call "default_group.json" "groups/world"
+    echo "Adding captains group"
+    PUT_api_call "captains_group.json" "groups/leads"
+
+    echo "Adding crewmembers group"
+    PUT_api_call "captains_group.json" "groups/team"
 
     echo "Changing admin password"
     PUT_api_call "admin_password.json" "accounts/self/password.http"
