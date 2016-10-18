@@ -33,11 +33,11 @@ function PUT_api_call() {
 
 # main driver function
 function main() {
-    echo "Adding captains group"
-    PUT_api_call "captains_group.json" "groups/leads"
+    echo "Adding team (leads) group"
+    PUT_api_call "team-leads.group.json" "groups/team-leads"
 
-    echo "Adding crewmembers group"
-    PUT_api_call "captains_group.json" "groups/team"
+    echo "Adding team (members) group"
+    PUT_api_call "team-members.group.json" "groups/team-members"
 
     echo "Changing admin password"
     PUT_api_call "admin_password.json" "accounts/self/password.http"

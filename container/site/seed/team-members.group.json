@@ -1,0 +1,5 @@
+{
+    "description"   : "Contains ordinary users",
+    "owner_id"      : "captains",
+    "visible_to_all": true
+}
