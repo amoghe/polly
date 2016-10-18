@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"crypto/rand"
 	"encoding/base64"
 	"encoding/json"
@@ -13,8 +14,8 @@ import (
 	"os"
 
 	"github.com/dghubble/gologin"
-	"github.com/dghubble/gologin/internal"
 	"github.com/dghubble/sessions"
+	"github.com/google/go-github/github"
 
 	"golang.org/x/oauth2"
 )
@@ -52,8 +53,8 @@ type GithubAppConfig struct {
 }
 
 type sessionCookieState struct {
-	UserID    int
-	AuthToken string
+	UserID      int
+	OAuth2Token oauth2.Token
 }
 
 // Server represents the server
@@ -102,8 +103,6 @@ func main() {
 
 // NewServer returns a new ServeMux with app routes.
 func NewServer(config *GithubAppConfig) *Server {
-	scc := gologin.DebugOnlyCookieConfig
-	scc.Name = "session-cookie"
 
 	server := Server{
 		githubAppConfig:     *config,
@@ -114,7 +113,10 @@ func NewServer(config *GithubAppConfig) *Server {
 			ClientSecret: config.GithubClientSecret,
 			RedirectURL:  "http://localhost:8080/github/callback",
 			Endpoint:     oauth2.Endpoint{AuthURL: GithubAuthURL, TokenURL: GithubTokenURL},
-			Scopes:       []string{"read:public_key"},
+			Scopes: []string{
+				"read:public_key",
+				"read:org",
+			},
 		},
 		mux: http.NewServeMux(),
 	}
@@ -176,6 +178,9 @@ func (s *Server) HandleProfile(w http.ResponseWriter, req *http.Request) {
 		handleError(w, err)
 	}
 
+	client := s.newGithubClientFromSessionCookie(req.Context(), sc)
+	client.Organizations.ListAll(nil)
+
 	b, _ := json.MarshalIndent(sc, "", "  ")
 	w.Write(b)
 }
@@ -187,13 +192,6 @@ func (s *Server) HandleCallback(w http.ResponseWriter, req *http.Request) {
 	if err := req.ParseForm(); err != nil {
 		handleError(w, err)
 	}
-
-	// dump, err := httputil.DumpRequestOut(req, false)
-	// if err != nil {
-	// 	log.Println("Error dumping request")
-	// 	handleError(w, err)
-	// }
-	// log.Println("CB REQ:", string(dump))
 
 	randState1, err := s.getRandomState(req)
 	if err != nil {
@@ -214,9 +212,7 @@ func (s *Server) HandleCallback(w http.ResponseWriter, req *http.Request) {
 		handleError(w, err)
 	}
 
-	b, _ := json.MarshalIndent(token, "", "  ")
-	log.Println("token:", string(b))
-	s.setSessionCookieState(w, sessionCookieState{UserID: 0, AuthToken: token.AccessToken})
+	s.setSessionCookieState(w, sessionCookieState{UserID: 0, OAuth2Token: *token})
 
 	// send them to their "homepage"
 	http.Redirect(w, req, "/profile", http.StatusFound)
@@ -244,7 +240,7 @@ func (s *Server) setRandomState(w http.ResponseWriter) string {
 	rand.Read(rnd)
 	val := base64.StdEncoding.EncodeToString(rnd)
 	log.Println("Setting cookie:", val)
-	http.SetCookie(w, internal.NewCookie(s.stateCookieConfig, val))
+	http.SetCookie(w, newCookieFromConfig(s.stateCookieConfig, val))
 	return val
 }
 
@@ -257,17 +253,18 @@ func (s *Server) getRandomState(r *http.Request) (string, error) {
 	return stateCookie.Value, err
 }
 
-// set the user ID and auth token in the session cookie
+// set the session state (user ID and auth token) in the session cookie
 func (s *Server) setSessionCookieState(w http.ResponseWriter, sc sessionCookieState) error {
 	val, err := json.Marshal(&sc)
 	if err != nil {
 		return err
 	}
 	b64 := base64.URLEncoding.EncodeToString(val)
-	http.SetCookie(w, internal.NewCookie(s.sessionCookieConfig, b64))
+	http.SetCookie(w, newCookieFromConfig(s.sessionCookieConfig, b64))
 	return nil
 }
 
+// get the session state from the session cookie
 func (s *Server) getSessionCookieState(r *http.Request) (sc sessionCookieState, err error) {
 	sessionCookie, err := r.Cookie(s.sessionCookieConfig.Name)
 	if err != nil {
@@ -279,4 +276,31 @@ func (s *Server) getSessionCookieState(r *http.Request) (sc sessionCookieState, 
 	}
 	json.Unmarshal([]byte(dec), &sc)
 	return
+}
+
+func (s *Server) newGithubClientFromSessionCookie(ctx context.Context, sc sessionCookieState) *github.Client {
+	clt := s.oauth2Config.Client(ctx, &sc.OAuth2Token)
+	return github.NewClient(clt)
+}
+
+// NewCookie returns a new http.Cookie with the given value and CookieConfig
+// properties (name, max-age, etc.).
+//
+// The MaxAge field is used to determine whether an Expires field should be
+// added for Internet Explorer compatability and what its value should be.
+func newCookieFromConfig(config gologin.CookieConfig, value string) *http.Cookie {
+	cookie := &http.Cookie{
+		Name:     config.Name,
+		Value:    value,
+		Domain:   config.Domain,
+		Path:     config.Path,
+		MaxAge:   config.MaxAge,
+		HttpOnly: config.HTTPOnly,
+		Secure:   config.Secure,
+	}
+	// IE <9 does not understand MaxAge, set Expires if MaxAge is non-zero.
+	// if expires, ok := expiresTime(config.MaxAge); ok {
+	// 	cookie.Expires = expires
+	// }
+	return cookie
 }
