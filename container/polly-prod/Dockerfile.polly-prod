@@ -1,12 +1,15 @@
-FROM abase
+FROM polly-base:1.0
 
 # Install deps
 RUN apt-get update && apt-get install --yes --no-install-recommends \
   git \
   wget
 
-# Add a gerrit user, ensure homedir
+# Ensure users
 RUN useradd -s /bin/bash -u 1001 --create-home gerrit
+RUN useradd -s /bin/bash -u 1002 --create-home frontman
+
+# Run in gerrit dir
 WORKDIR /home/gerrit
 
 # Copy in site files, make 'gerrit' own them
@@ -47,6 +50,13 @@ RUN java -jar gerrit-2.12.3.war init \
   --no-auto-start \
   --batch
 RUN cd site && java -jar bin/gerrit.war reindex
+
+#
+# frontman stuff
+#
+
+WORKDIR /home/frontman
+COPY frontman frontman
 
 #
 # Cleanup

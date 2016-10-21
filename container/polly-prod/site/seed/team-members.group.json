@@ -1,5 +1,5 @@
 {
     "description"   : "Contains ordinary users",
-    "owner_id"      : "captains",
+    "owner_id"      : "team-leads",
     "visible_to_all": true
 }
