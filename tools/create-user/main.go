@@ -20,6 +20,7 @@ var (
 	user = kingpin.Flag("username", "Name of user to create").Required().String()
 	pass = kingpin.Flag("password", "Password of user to create").Default("password").String()
 	lead = kingpin.Flag("team-lead", "Member is a team lead").Bool()
+	skey = kingpin.Flag("ssh-pubkey", "SSH public key").String()
 )
 
 func main() {
@@ -41,6 +42,7 @@ func main() {
 		Email:        "test@user.com",
 		HTTPPassword: *pass,
 		Groups:       groups,
+		SSHKey:       *skey,
 	})
 	if err != nil {
 		log.Fatalln("Failed to create user:", err)

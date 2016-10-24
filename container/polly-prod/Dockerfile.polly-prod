@@ -55,8 +55,19 @@ RUN cd site && java -jar bin/gerrit.war reindex
 # frontman stuff
 #
 
+USER frontman
 WORKDIR /home/frontman
 COPY frontman frontman
+
+#
+# tools
+#
+
+USER gerrit
+RUN mkdir /home/gerrit/tools
+WORKDIR /home/gerrit/tools
+COPY create-user create-user
+COPY create-project create-project
 
 #
 # Cleanup
