@@ -1,24 +1,18 @@
-FROM polly-base:1.0
-
-# Install deps
-RUN apt-get update && apt-get install --yes --no-install-recommends \
-  git \
-  wget
+FROM polly-base:latest
 
 # Ensure users
 RUN useradd -s /bin/bash -u 1001 --create-home gerrit
 RUN useradd -s /bin/bash -u 1002 --create-home frontman
 
-# Run in gerrit dir
-WORKDIR /home/gerrit
+# Copy in frontman files
+USER    frontman
+WORKDIR /home/frontman
+COPY    rootfs/home/frontman ./
 
-# Copy in site files, make 'gerrit' own them
-COPY site site/
-RUN chown -R gerrit:gerrit site
-
-# Run as gerrit, it its homedir
-USER gerrit
+# Copy in gerrit files
+USER    gerrit
 WORKDIR /home/gerrit
+COPY    rootfs/home/gerrit/ ./
 
 # Download gerrit
 RUN wget https://www.gerritcodereview.com/download/gerrit-2.12.3.war -q
@@ -50,24 +44,6 @@ RUN java -jar gerrit-2.12.3.war init \
   --no-auto-start \
   --batch
 RUN cd site && java -jar bin/gerrit.war reindex
-
-#
-# frontman stuff
-#
-
-USER frontman
-WORKDIR /home/frontman
-COPY frontman frontman
-
-#
-# tools
-#
-
-USER gerrit
-RUN mkdir /home/gerrit/tools
-WORKDIR /home/gerrit/tools
-COPY create-user create-user
-COPY create-project create-project
 
 #
 # Cleanup
