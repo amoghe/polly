@@ -19,23 +19,28 @@ var (
 
 	user = kingpin.Flag("username", "Name of user to create").Required().String()
 	pass = kingpin.Flag("password", "Password of user to create").Default("password").String()
+	lead = kingpin.Flag("team-lead", "Member is a team lead").Bool()
 )
 
 func main() {
 	kingpin.Parse()
 	client, _ := gerrit.NewClient(fmt.Sprintf("http://%s:%d", *gAddr, *gPort), nil)
+	client.Authentication.SetDigestAuth(*adminUser, *adminPass)
 
 	if *user == "" {
 		log.Fatalf("User not specified")
 	}
 
-	client.Authentication.SetDigestAuth(*adminUser, *adminPass)
+	groups := []string{"team-members"}
+	if *lead {
+		groups = append(groups, "team-leads")
+	}
 
 	user, _, err := client.Accounts.CreateAccount(*user, &gerrit.AccountInput{
 		Name:         "test user",
 		Email:        "test@user.com",
 		HTTPPassword: *pass,
-		Groups:       []string{"team-members"},
+		Groups:       groups,
 	})
 	if err != nil {
 		log.Fatalln("Failed to create user:", err)
