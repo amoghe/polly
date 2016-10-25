@@ -4,7 +4,7 @@ namespace :bin do
 
   desc "Build the frontend server"
   task :frontman => FileList.new('./frontman/*.go') do
-    Dir.chdir("./frontman") { sh("go build") }
+    sh("cd ./frontman && go build")
   end
 
 end
@@ -59,11 +59,11 @@ namespace :tools do
   def eft(n); "#{dft(n)}/#{n}"; end # eft: executable for tool
 
   file eft("create-user") => FileList["#{dft("create-user")}/*.go"] do
-    Dir.chdir(dft("create-user")) { sh("go build") }
+    sh("cd #{dft("create-user")} && go build")
   end
 
   file eft("create-project") => FileList["#{dft("create-project")}/*.go"] do
-    Dir.chdir(dft("create-project")) { sh("go build") }
+    sh("cd #{dft("create-project")} && go build")
   end
 
   desc 'Build all the tools'
