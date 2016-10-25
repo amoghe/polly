@@ -3,6 +3,7 @@ package main
 import (
 	"encoding/json"
 	"fmt"
+	"io/ioutil"
 	"log"
 	"os"
 
@@ -20,7 +21,7 @@ var (
 	user = kingpin.Flag("username", "Name of user to create").Required().String()
 	pass = kingpin.Flag("password", "Password of user to create").Default("password").String()
 	lead = kingpin.Flag("team-lead", "Member is a team lead").Bool()
-	skey = kingpin.Flag("ssh-pubkey", "SSH public key").String()
+	keyf = kingpin.Flag("ssh-pubkey", "file containing SSH public key").String()
 )
 
 func main() {
@@ -37,13 +38,24 @@ func main() {
 		groups = append(groups, "team-leads")
 	}
 
-	user, _, err := client.Accounts.CreateAccount(*user, &gerrit.AccountInput{
-		Name:         "test user",
-		Email:        "test@user.com",
+	keystr := ""
+	if *keyf != "" {
+		if keybytes, err := ioutil.ReadFile(*keyf); err != nil {
+			log.Fatalln("Failed to read ssh key file", *keyf, ":", err)
+		} else {
+			keystr = string(keybytes)
+		}
+	}
+
+	target := gerrit.AccountInput{
+		Name:         fmt.Sprintf("%s Test", *user),
+		Email:        fmt.Sprintf("%s@internaluser.com", *user),
 		HTTPPassword: *pass,
 		Groups:       groups,
-		SSHKey:       *skey,
-	})
+		SSHKey:       keystr,
+	}
+
+	user, _, err := client.Accounts.CreateAccount(*user, &target)
 	if err != nil {
 		log.Fatalln("Failed to create user:", err)
 	}
