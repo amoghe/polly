@@ -10,11 +10,11 @@ set -x
 
 # PUT the specified JSON ($1) to the specified endpoint ($2)
 function PUT_api_call() {
-  seedfile=$1
+  bodyfile=$1
   api_path=$2
 
-  if [[ -z "$seedfile" ]]; then
-	   echo "seed file not specified"
+  if [[ -z "$bodyfile" ]]; then
+	   echo "body file not specified"
      exit 1
   fi
 
@@ -27,9 +27,33 @@ function PUT_api_call() {
     --silent \
     --digest --user "$GERRIT_ADMIN_USER:$GERRIT_ADMIN_PASS" \
     --header "Content-Type: application/json" \
-    -d@$SEED_DIR/$seedfile \
+    -d@$SEED_DIR/$bodyfile \
     http://localhost:8080/a/$api_path
 }
+
+# POST the specified JSON ($1) to the specified endpoint ($2)
+function POST_api_call() {
+  bodyfile=$1
+  api_path=$2
+
+  if [[ -z "$bodyfile" ]]; then
+	   echo "body file not specified"
+     exit 1
+  fi
+
+  if [[ -z "$api_path" ]]; then
+	   echo "API path not specified"
+     exit 1
+  fi
+
+  curl -X POST \
+    --silent \
+    --digest --user "$GERRIT_ADMIN_USER:$GERRIT_ADMIN_PASS" \
+    --header "Content-Type: plain/text" \
+    -d@$SEED_DIR/$bodyfile \
+    http://localhost:8080/a/$api_path
+}
+
 
 # main driver function
 function main() {
@@ -41,6 +65,9 @@ function main() {
 
     echo "Changing admin password"
     PUT_api_call "admin.password.json" "accounts/self/password.http"
+
+    echo "Adding ssh keys for admin"
+    POST_api_call "/home/admin/.ssh/id_rsa.pub" "accounts/self/sshkeys"
 }
 
 #

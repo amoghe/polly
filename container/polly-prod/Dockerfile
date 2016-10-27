@@ -1,8 +1,14 @@
 FROM polly-base:latest
 
 # Ensure users
-RUN useradd -s /bin/bash -u 1001 --create-home gerrit
-RUN useradd -s /bin/bash -u 1002 --create-home frontman
+RUN useradd -s /bin/bash -u 1000 --create-home admin
+RUN useradd -s /bin/bash -u 1001 --create-home gerrit   --groups admin
+RUN useradd -s /bin/bash -u 1002 --create-home frontman --groups admin
+
+# setup admin user ssh keys
+USER admin
+WORKDIR /home/admin
+RUN mkdir .ssh && ssh-keygen -t rsa -N '' -f .ssh/id_rsa
 
 # Copy in frontman files
 USER    frontman
