@@ -2,10 +2,12 @@
 # Build the executables
 namespace :bin do
 
-  desc "Build the frontend server"
-  task :frontman => FileList.new('./frontman/*.go') do
+  file 'frontman/frontman' => FileList['frontman/**/*.go'] do
     sh("cd ./frontman && go build")
   end
+
+  desc "Build the frontend server"
+  task :frontman => ['frontman/frontman']
 
 end
 
@@ -49,6 +51,17 @@ namespace :container do
     }
   end
 
+  desc "Build the polly-test container"
+  task :test do
+    container_name = "polly-test"
+    container_dir  = "container/#{container_name}"
+    version        = ENV.fetch("VER", "latest")
+
+    Dir.chdir(container_dir) {
+      sh("docker build -t #{container_name}:#{version} .")
+    }
+  end
+
 end
 
 #
@@ -66,7 +79,20 @@ namespace :tools do
     sh("cd #{dft("create-project")} && go build")
   end
 
+  file eft("list-project-acl") => FileList["#{dft("list-project-acl")}/*.go"] do
+    sh("cd #{dft("list-project-acl")} && go build")
+  end
+
+  file eft("list-groups") => FileList["#{dft("list-groups")}/*.go"] do
+    sh("cd #{dft("list-groups")} && go build")
+  end
+
   desc 'Build all the tools'
-  task :all => [eft('create-user'), eft('create-project')]
+  task :all => [
+                eft("create-user"),
+                eft("create-project"),
+                eft("list-project-acl"),
+                eft("list-groups"),
+              ]
 
 end
