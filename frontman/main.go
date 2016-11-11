@@ -5,17 +5,19 @@ import (
 	"crypto/rand"
 	"encoding/base64"
 	"encoding/json"
-	"errors"
 	"flag"
-	"fmt"
-	"io/ioutil"
 	"log"
 	"net/http"
 	"os"
 
+	goji "goji.io"
+	"goji.io/pat"
+
+	"github.com/alioygur/gores"
 	"github.com/dghubble/gologin"
 	"github.com/dghubble/sessions"
 	"github.com/google/go-github/github"
+	"github.com/pkg/errors"
 
 	"golang.org/x/oauth2"
 )
@@ -33,16 +35,16 @@ var (
 		Name:     "session-cookie",
 		Path:     "/",
 		MaxAge:   3600, // FIXME
-		HTTPOnly: true, // FIXME
-		Secure:   false,
+		HTTPOnly: true,
+		Secure:   false, // FIXME
 	}
 
 	stateCookieConfig = gologin.CookieConfig{
 		Name:     "state-cookie",
 		Path:     "/",
 		MaxAge:   60,
-		HTTPOnly: true, // FIXME
-		Secure:   false,
+		HTTPOnly: true,
+		Secure:   false, // FIXME
 	}
 )
 
@@ -52,7 +54,7 @@ type GithubAppConfig struct {
 	GithubClientSecret string
 }
 
-type sessionCookieState struct {
+type sessionState struct {
 	UserID      int
 	OAuth2Token oauth2.Token
 }
@@ -63,13 +65,13 @@ type Server struct {
 	stateCookieConfig   gologin.CookieConfig
 	sessionCookieConfig gologin.CookieConfig
 	oauth2Config        oauth2.Config
-	mux                 *http.ServeMux
+	mux                 *goji.Mux
 }
 
 // main creates and starts a Server listening.
 func main() {
 	var (
-		listenAddress = "localhost:8080"
+		listenAddress = "0.0.0.0:8080"
 
 		config = &GithubAppConfig{
 			GithubClientID:     os.Getenv("GITHUB_CLIENT_ID"),
@@ -118,37 +120,26 @@ func NewServer(config *GithubAppConfig) *Server {
 				"read:org",
 			},
 		},
-		mux: http.NewServeMux(),
+		mux: goji.NewMux(),
 	}
 
-	// Setup routes
-	server.mux.HandleFunc("/", server.HandleWelcome)
-	server.mux.HandleFunc("/logout", server.HandleLogout)
-	server.mux.HandleFunc("/profile", server.HandleProfile)
-	server.mux.HandleFunc("/auth/github/login", server.HandleLogin)
-	server.mux.HandleFunc("/github/callback", server.HandleCallback)
+	// Auth routes
+	server.mux.HandleFunc(pat.New("/auth/github/login"), server.HandleLogin)
+	server.mux.HandleFunc(pat.New("/github/callback"), server.HandleCallback)
+	server.mux.HandleFunc(pat.New("/logout"), server.HandleLogout)
+	// Github API routes
+	server.mux.HandleFunc(pat.New("/github/organizations"), server.ListGithubOrganizations)
+	server.mux.HandleFunc(pat.New("/github/organizations/:org_name/repositories"), server.ListGithubRepositoriesForOrganization)
+	// Gerrit
+	server.mux.HandleFunc(pat.New("gerrit/import/repository"), server.CreateGerritRepository)
 
 	return &server
 }
 
 // ServeHTTP allows Server to be a mux
 func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	log.Println("Serving req:", r.URL.String())
+	//log.Println("Serving req:", r.URL.String())
 	s.mux.ServeHTTP(w, r)
-}
-
-// HandleWelcome shows a welcome message and login button.
-func (s *Server) HandleWelcome(w http.ResponseWriter, req *http.Request) {
-	if req.URL.Path != "/" {
-		http.NotFound(w, req)
-		return
-	}
-	if s.isAuthenticated(req) {
-		http.Redirect(w, req, "/profile", http.StatusFound)
-		return
-	}
-	page, _ := ioutil.ReadFile("home.html")
-	fmt.Fprintf(w, string(page))
 }
 
 // HandleLogout destroys the session on POSTs and redirects to home.
@@ -161,9 +152,9 @@ func (s *Server) HandleLogout(w http.ResponseWriter, req *http.Request) {
 
 // HandleLogin starts the OAuth login process
 func (s *Server) HandleLogin(w http.ResponseWriter, req *http.Request) {
-	if s.isAuthenticated(req) {
+	if s.hasSessionState(req) {
 		// already authenticated
-		http.Redirect(w, req, "/", http.StatusFound)
+		http.Redirect(w, req, "/github/organizations", http.StatusFound)
 		return
 	}
 
@@ -171,51 +162,36 @@ func (s *Server) HandleLogin(w http.ResponseWriter, req *http.Request) {
 	http.Redirect(w, req, s.oauth2Config.AuthCodeURL(randomState), http.StatusFound)
 }
 
-// HandleProfile displays the profile page
-func (s *Server) HandleProfile(w http.ResponseWriter, req *http.Request) {
-	sc, err := s.getSessionCookieState(req)
-	if err != nil {
-		handleError(w, err)
-	}
-
-	client := s.newGithubClientFromSessionCookie(req.Context(), sc)
-	client.Organizations.ListAll(nil)
-
-	b, _ := json.MarshalIndent(sc, "", "  ")
-	w.Write(b)
-}
-
 // HandleCallback handles the outh callback
 func (s *Server) HandleCallback(w http.ResponseWriter, req *http.Request) {
 	// compare the random state from the callback and the cookie
 
 	if err := req.ParseForm(); err != nil {
-		handleError(w, err)
+		handleError(w, errors.Wrap(err, "Failed to parse form (oauth2 callback)"))
 	}
 
 	randState1, err := s.getRandomState(req)
 	if err != nil {
-		handleError(w, err)
+		handleError(w, errors.Wrap(err, "failed to extract random CSRF state (oauth2 callback)"))
 	}
 	randState2 := req.Form.Get("state")
 	if randState2 == "" {
-		handleError(w, errors.New("oauth2 callback: Request missing code or state"))
+		handleError(w, errors.Wrap(err, "request missing code or state (oauth2 callback)"))
 	}
 	if randState1 != randState2 {
-		handleError(w, errors.New("oauth2 callback: Mismatched state. Please retry auth"))
+		handleError(w, errors.Wrap(err, "mismatched state, please retry auth (oauth2 callback)"))
 	}
 
 	authCode := req.Form.Get("code") // Github docs say this is the code
 
 	token, err := s.oauth2Config.Exchange(req.Context(), authCode)
 	if err != nil {
-		handleError(w, err)
+		handleError(w, errors.Wrap(err, "failed to exchange token (oauth2 callback)"))
 	}
+	s.setSessionState(w, sessionState{UserID: 0, OAuth2Token: *token})
 
-	s.setSessionCookieState(w, sessionCookieState{UserID: 0, OAuth2Token: *token})
-
-	// send them to their "homepage"
-	http.Redirect(w, req, "/profile", http.StatusFound)
+	// TODO: send them to their "homepage"
+	http.Redirect(w, req, "/github/organizations", http.StatusFound)
 }
 
 //
@@ -223,11 +199,21 @@ func (s *Server) HandleCallback(w http.ResponseWriter, req *http.Request) {
 //
 
 func handleError(w http.ResponseWriter, err error) {
-	log.Println("ERR: ", err)
+	log.Printf("ERR: (%T) %s\n", err, err)
+
+	var retcode int
+	switch err.(type) {
+	case *github.ErrorResponse:
+		gherr, _ := err.(*github.ErrorResponse)
+		retcode = gherr.Response.StatusCode
+	default:
+		retcode = http.StatusBadRequest
+	}
+	gores.JSON(w, retcode, struct{ Error string }{Error: err.Error()})
 }
 
-// isAuthenticated returns true if the user has a signed session cookie.
-func (s *Server) isAuthenticated(req *http.Request) bool {
+// hasSessionState returns true if the user has a cookie containing session state.
+func (s *Server) hasSessionState(req *http.Request) bool {
 	if _, err := sessionStore.Get(req, s.sessionCookieConfig.Name); err == nil {
 		return true
 	}
@@ -238,9 +224,10 @@ func (s *Server) isAuthenticated(req *http.Request) bool {
 func (s *Server) setRandomState(w http.ResponseWriter) string {
 	rnd := make([]byte, 32)
 	rand.Read(rnd)
+
 	val := base64.StdEncoding.EncodeToString(rnd)
-	log.Println("Setting cookie:", val)
 	http.SetCookie(w, newCookieFromConfig(s.stateCookieConfig, val))
+
 	return val
 }
 
@@ -254,7 +241,7 @@ func (s *Server) getRandomState(r *http.Request) (string, error) {
 }
 
 // set the session state (user ID and auth token) in the session cookie
-func (s *Server) setSessionCookieState(w http.ResponseWriter, sc sessionCookieState) error {
+func (s *Server) setSessionState(w http.ResponseWriter, sc sessionState) error {
 	val, err := json.Marshal(&sc)
 	if err != nil {
 		return err
@@ -265,7 +252,7 @@ func (s *Server) setSessionCookieState(w http.ResponseWriter, sc sessionCookieSt
 }
 
 // get the session state from the session cookie
-func (s *Server) getSessionCookieState(r *http.Request) (sc sessionCookieState, err error) {
+func (s *Server) getSessionState(r *http.Request) (sc sessionState, err error) {
 	sessionCookie, err := r.Cookie(s.sessionCookieConfig.Name)
 	if err != nil {
 		return
@@ -278,7 +265,7 @@ func (s *Server) getSessionCookieState(r *http.Request) (sc sessionCookieState, 
 	return
 }
 
-func (s *Server) newGithubClientFromSessionCookie(ctx context.Context, sc sessionCookieState) *github.Client {
+func (s *Server) newGithubClientFromSessionState(ctx context.Context, sc sessionState) *github.Client {
 	clt := s.oauth2Config.Client(ctx, &sc.OAuth2Token)
 	return github.NewClient(clt)
 }
