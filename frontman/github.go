@@ -16,7 +16,7 @@ func (s *Server) ListGithubOrganizations(w http.ResponseWriter, req *http.Reques
 		return
 	}
 
-	client := s.newGithubClientFromSessionState(req.Context(), sc)
+	client := s.newGithubClient(req.Context(), &sc.OAuth2Token)
 	mems, _, err := client.Organizations.ListOrgMemberships(&github.ListOrgMembershipsOptions{State: "active"})
 	if err != nil {
 		handleError(w, err)
@@ -36,7 +36,7 @@ func (s *Server) ListGithubRepositoriesForOrganization(w http.ResponseWriter, re
 		handleError(w, err)
 		return
 	}
-	client := s.newGithubClientFromSessionState(req.Context(), sc)
+	client := s.newGithubClient(req.Context(), &sc.OAuth2Token)
 
 	repos, _, err := client.Repositories.ListByOrg(orgID, nil)
 	if err != nil {

@@ -14,7 +14,6 @@ import (
 	"goji.io/pat"
 
 	"github.com/alioygur/gores"
-	"github.com/dghubble/gologin"
 	"github.com/dghubble/sessions"
 	"github.com/google/go-github/github"
 	"github.com/pkg/errors"
@@ -30,22 +29,6 @@ var (
 
 	// sessionStore encodes and decodes session data stored in signed cookies
 	sessionStore = sessions.NewCookieStore([]byte("pollySecret"), nil)
-
-	sessionCookieConfig = gologin.CookieConfig{
-		Name:     "session-cookie",
-		Path:     "/",
-		MaxAge:   3600, // FIXME
-		HTTPOnly: true,
-		Secure:   false, // FIXME
-	}
-
-	stateCookieConfig = gologin.CookieConfig{
-		Name:     "state-cookie",
-		Path:     "/",
-		MaxAge:   60,
-		HTTPOnly: true,
-		Secure:   false, // FIXME
-	}
 )
 
 // GithubAppConfig holds the config for our Github app
@@ -61,11 +44,11 @@ type sessionState struct {
 
 // Server represents the server
 type Server struct {
-	githubAppConfig     GithubAppConfig
-	stateCookieConfig   gologin.CookieConfig
-	sessionCookieConfig gologin.CookieConfig
-	oauth2Config        oauth2.Config
-	mux                 *goji.Mux
+	githubAppConfig    GithubAppConfig
+	stateCookieMaker   CookieMaker
+	sessionCookieMaker CookieMaker
+	oauth2Config       oauth2.Config
+	mux                *goji.Mux
 }
 
 // main creates and starts a Server listening.
@@ -107,9 +90,9 @@ func main() {
 func NewServer(config *GithubAppConfig) *Server {
 
 	server := Server{
-		githubAppConfig:     *config,
-		stateCookieConfig:   stateCookieConfig,
-		sessionCookieConfig: sessionCookieConfig,
+		githubAppConfig:    *config,
+		stateCookieMaker:   stateCookieMaker,
+		sessionCookieMaker: sessionCookieMaker,
 		oauth2Config: oauth2.Config{
 			ClientID:     config.GithubClientID,
 			ClientSecret: config.GithubClientSecret,
@@ -145,7 +128,7 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 // HandleLogout destroys the session on POSTs and redirects to home.
 func (s *Server) HandleLogout(w http.ResponseWriter, req *http.Request) {
 	if req.Method == "POST" {
-		sessionStore.Destroy(w, s.sessionCookieConfig.Name)
+		sessionStore.Destroy(w, s.sessionCookieMaker.Name)
 	}
 	http.Redirect(w, req, "/", http.StatusFound)
 }
@@ -173,22 +156,39 @@ func (s *Server) HandleCallback(w http.ResponseWriter, req *http.Request) {
 	randState1, err := s.getRandomState(req)
 	if err != nil {
 		handleError(w, errors.Wrap(err, "failed to extract random CSRF state (oauth2 callback)"))
+		return
 	}
 	randState2 := req.Form.Get("state")
 	if randState2 == "" {
 		handleError(w, errors.Wrap(err, "request missing code or state (oauth2 callback)"))
+		return
 	}
 	if randState1 != randState2 {
 		handleError(w, errors.Wrap(err, "mismatched state, please retry auth (oauth2 callback)"))
+		return
 	}
 
 	authCode := req.Form.Get("code") // Github docs say this is the code
-
 	token, err := s.oauth2Config.Exchange(req.Context(), authCode)
 	if err != nil {
 		handleError(w, errors.Wrap(err, "failed to exchange token (oauth2 callback)"))
+		return
 	}
-	s.setSessionState(w, sessionState{UserID: 0, OAuth2Token: *token})
+
+	client := s.newGithubClient(req.Context(), token)
+	if err != nil {
+		handleError(w, errors.Wrap(err, "failed to create github client"))
+		return
+	}
+
+	usr, _, err := client.Users.Get("")
+	if err != nil {
+		handleError(w, errors.Wrap(err, "failed to get authenticated user"))
+		return
+	}
+
+	state := sessionState{UserID: *usr.ID, OAuth2Token: *token}
+	s.setSessionState(w, state)
 
 	// TODO: send them to their "homepage"
 	http.Redirect(w, req, "/github/organizations", http.StatusFound)
@@ -214,7 +214,7 @@ func handleError(w http.ResponseWriter, err error) {
 
 // hasSessionState returns true if the user has a cookie containing session state.
 func (s *Server) hasSessionState(req *http.Request) bool {
-	if _, err := sessionStore.Get(req, s.sessionCookieConfig.Name); err == nil {
+	if _, err := sessionStore.Get(req, s.sessionCookieMaker.Name); err == nil {
 		return true
 	}
 	return false
@@ -226,14 +226,14 @@ func (s *Server) setRandomState(w http.ResponseWriter) string {
 	rand.Read(rnd)
 
 	val := base64.StdEncoding.EncodeToString(rnd)
-	http.SetCookie(w, newCookieFromConfig(s.stateCookieConfig, val))
+	http.SetCookie(w, s.stateCookieMaker.NewCookie(val))
 
 	return val
 }
 
 // get the random state value from the cookie (we set earlier)
 func (s *Server) getRandomState(r *http.Request) (string, error) {
-	stateCookie, err := r.Cookie(s.stateCookieConfig.Name)
+	stateCookie, err := r.Cookie(s.stateCookieMaker.Name)
 	if err != nil {
 		return "", err
 	}
@@ -247,47 +247,28 @@ func (s *Server) setSessionState(w http.ResponseWriter, sc sessionState) error {
 		return err
 	}
 	b64 := base64.URLEncoding.EncodeToString(val)
-	http.SetCookie(w, newCookieFromConfig(s.sessionCookieConfig, b64))
+	http.SetCookie(w, s.sessionCookieMaker.NewCookie(b64))
 	return nil
 }
 
 // get the session state from the session cookie
-func (s *Server) getSessionState(r *http.Request) (sc sessionState, err error) {
-	sessionCookie, err := r.Cookie(s.sessionCookieConfig.Name)
+func (s *Server) getSessionState(r *http.Request) (sessionState, error) {
+	sessionCookie, err := r.Cookie(s.sessionCookieMaker.Name)
 	if err != nil {
-		return
+		return sessionState{}, err
 	}
 	dec, err := base64.URLEncoding.DecodeString(sessionCookie.Value)
 	if err != nil {
-		return
+		return sessionState{}, err
 	}
-	json.Unmarshal([]byte(dec), &sc)
-	return
+	sc := sessionState{}
+	if err := json.Unmarshal([]byte(dec), &sc); err != nil {
+		return sc, err
+	}
+	return sc, nil
 }
 
-func (s *Server) newGithubClientFromSessionState(ctx context.Context, sc sessionState) *github.Client {
-	clt := s.oauth2Config.Client(ctx, &sc.OAuth2Token)
+func (s *Server) newGithubClient(ctx context.Context, tok *oauth2.Token) *github.Client {
+	clt := s.oauth2Config.Client(ctx, tok)
 	return github.NewClient(clt)
-}
-
-// NewCookie returns a new http.Cookie with the given value and CookieConfig
-// properties (name, max-age, etc.).
-//
-// The MaxAge field is used to determine whether an Expires field should be
-// added for Internet Explorer compatability and what its value should be.
-func newCookieFromConfig(config gologin.CookieConfig, value string) *http.Cookie {
-	cookie := &http.Cookie{
-		Name:     config.Name,
-		Value:    value,
-		Domain:   config.Domain,
-		Path:     config.Path,
-		MaxAge:   config.MaxAge,
-		HttpOnly: config.HTTPOnly,
-		Secure:   config.Secure,
-	}
-	// IE <9 does not understand MaxAge, set Expires if MaxAge is non-zero.
-	// if expires, ok := expiresTime(config.MaxAge); ok {
-	// 	cookie.Expires = expires
-	// }
-	return cookie
 }
