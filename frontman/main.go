@@ -13,12 +13,13 @@ import (
 	goji "goji.io"
 	"goji.io/pat"
 
-	"github.com/alioygur/gores"
+	"github.com/amoghe/polly/frontman/datastore"
 	"github.com/dghubble/sessions"
 	"github.com/google/go-github/github"
-	"github.com/pkg/errors"
-
+	"github.com/jinzhu/gorm"
 	"golang.org/x/oauth2"
+
+	_ "github.com/mattn/go-sqlite3"
 )
 
 var (
@@ -48,6 +49,7 @@ type Server struct {
 	stateCookieMaker   CookieMaker
 	sessionCookieMaker CookieMaker
 	oauth2Config       oauth2.Config
+	db                 *gorm.DB
 	mux                *goji.Mux
 }
 
@@ -60,10 +62,12 @@ func main() {
 			GithubClientID:     os.Getenv("GITHUB_CLIENT_ID"),
 			GithubClientSecret: os.Getenv("GITHUB_CLIENT_SECRET"),
 		}
+		clientID     = flag.String("client-id", "", "Github Client ID")
+		clientSecret = flag.String("client-secret", "", "Github Client Secret")
+		dbType       = flag.String("db-type", "sqlite3", "Type of database")
+		dbDSN        = flag.String("db-dsn", "/tmp/polly", "Database DSN")
 	)
 	// allow consumer credential flags to override config fields
-	clientID := flag.String("client-id", "", "Github Client ID")
-	clientSecret := flag.String("client-secret", "", "Github Client Secret")
 	flag.Parse()
 
 	if *clientID != "" {
@@ -79,15 +83,28 @@ func main() {
 		log.Fatal("Missing Github Client Secret")
 	}
 
-	log.Printf("Starting Server listening on %s\n", listenAddress)
-	err := http.ListenAndServe(listenAddress, NewServer(config))
+	log.Println("Connecting to db", *dbType, "at", *dbDSN)
+	db, err := datastore.OpenDatabase(*dbType, *dbDSN)
+	if err != nil {
+		log.Fatal("Failed to open db handle: ", err)
+	}
+
+	err = datastore.MigrateDatabase(db)
+	if err != nil {
+		log.Fatal("Failed to migrate db: ", err)
+	}
+
+	log.Println("Starting Server listening on:", listenAddress)
+	err = http.ListenAndServe(listenAddress, NewServer(config, db))
 	if err != nil {
 		log.Fatal("ListenAndServe: ", err)
 	}
+
+	log.Println("Frontman exiting")
 }
 
 // NewServer returns a new ServeMux with app routes.
-func NewServer(config *GithubAppConfig) *Server {
+func NewServer(config *GithubAppConfig, db *gorm.DB) *Server {
 
 	server := Server{
 		githubAppConfig:    *config,
@@ -96,7 +113,7 @@ func NewServer(config *GithubAppConfig) *Server {
 		oauth2Config: oauth2.Config{
 			ClientID:     config.GithubClientID,
 			ClientSecret: config.GithubClientSecret,
-			RedirectURL:  "http://localhost:8080/github/callback",
+			RedirectURL:  "http://localhost:8080/auth/github/callback",
 			Endpoint:     oauth2.Endpoint{AuthURL: GithubAuthURL, TokenURL: GithubTokenURL},
 			Scopes: []string{
 				"read:public_key",
@@ -104,17 +121,19 @@ func NewServer(config *GithubAppConfig) *Server {
 			},
 		},
 		mux: goji.NewMux(),
+		db:  db,
 	}
 
 	// Auth routes
-	server.mux.HandleFunc(pat.New("/auth/github/login"), server.HandleLogin)
-	server.mux.HandleFunc(pat.New("/github/callback"), server.HandleCallback)
-	server.mux.HandleFunc(pat.New("/logout"), server.HandleLogout)
+	server.mux.HandleFunc(pat.Get("/auth/github/login"), server.HandleLogin)
+	server.mux.HandleFunc(pat.Get("/auth/github/callback"), server.HandleCallback)
+	server.mux.HandleFunc(pat.Post("/logout"), server.HandleLogout)
 	// Github API routes
-	server.mux.HandleFunc(pat.New("/github/organizations"), server.ListGithubOrganizations)
-	server.mux.HandleFunc(pat.New("/github/organizations/:org_name/repositories"), server.ListGithubRepositoriesForOrganization)
+	server.mux.HandleFunc(pat.Get("/github/organizations"), server.ListGithubOrganizations)
+	server.mux.HandleFunc(pat.Get("/github/organizations/:org_name/repositories"), server.ListGithubRepositoriesForOrganization)
 	// Gerrit
-	server.mux.HandleFunc(pat.New("gerrit/import/repository"), server.CreateGerritRepository)
+	server.mux.HandleFunc(pat.Post("/polly/organizations"), server.CreatePollyOrganization)
+	server.mux.HandleFunc(pat.Post("/polly/organizations/:org_name/repositories"), server.CreatePollyRepository)
 
 	return &server
 }
@@ -147,43 +166,44 @@ func (s *Server) HandleLogin(w http.ResponseWriter, req *http.Request) {
 
 // HandleCallback handles the outh callback
 func (s *Server) HandleCallback(w http.ResponseWriter, req *http.Request) {
-	// compare the random state from the callback and the cookie
 
+	// compare the random state from the callback and the cookie
 	if err := req.ParseForm(); err != nil {
-		handleError(w, errors.Wrap(err, "Failed to parse form (oauth2 callback)"))
+		handleUnauthorized(w, "Failed to parse form (oauth2 callback)")
+		return
 	}
 
 	randState1, err := s.getRandomState(req)
 	if err != nil {
-		handleError(w, errors.Wrap(err, "failed to extract random CSRF state (oauth2 callback)"))
+		handleUnauthorized(w, "failed to extract random CSRF state (oauth2 callback)")
 		return
 	}
 	randState2 := req.Form.Get("state")
 	if randState2 == "" {
-		handleError(w, errors.Wrap(err, "request missing code or state (oauth2 callback)"))
+		handleUnauthorized(w, "request missing code or state (oauth2 callback)")
 		return
 	}
 	if randState1 != randState2 {
-		handleError(w, errors.Wrap(err, "mismatched state, please retry auth (oauth2 callback)"))
+		handleUnauthorized(w, "mismatched state, please retry auth (oauth2 callback)")
 		return
 	}
 
 	authCode := req.Form.Get("code") // Github docs say this is the code
 	token, err := s.oauth2Config.Exchange(req.Context(), authCode)
 	if err != nil {
-		handleError(w, errors.Wrap(err, "failed to exchange token (oauth2 callback)"))
+		handleUnauthorized(w, "failed to exchange token (oauth2 callback)")
 		return
 	}
 
 	client := s.newGithubClient(req.Context(), token)
 	if err != nil {
-		handleError(w, errors.Wrap(err, "failed to create github client"))
+		handleUnauthorized(w, "failed to create github client")
 		return
 	}
 
 	usr, _, err := client.Users.Get("")
 	if err != nil {
-		handleError(w, errors.Wrap(err, "failed to get authenticated user"))
+		handleUnauthorized(w, "failed to get authenticated user")
 		return
 	}
 
@@ -197,20 +217,6 @@ func (s *Server) HandleCallback(w http.ResponseWriter, req *http.Request) {
 //
 // - - - Helpers - - -
 //
-
-func handleError(w http.ResponseWriter, err error) {
-	log.Printf("ERR: (%T) %s\n", err, err)
-
-	var retcode int
-	switch err.(type) {
-	case *github.ErrorResponse:
-		gherr, _ := err.(*github.ErrorResponse)
-		retcode = gherr.Response.StatusCode
-	default:
-		retcode = http.StatusBadRequest
-	}
-	gores.JSON(w, retcode, struct{ Error string }{Error: err.Error()})
-}
 
 // hasSessionState returns true if the user has a cookie containing session state.
 func (s *Server) hasSessionState(req *http.Request) bool {
