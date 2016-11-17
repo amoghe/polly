@@ -5,6 +5,8 @@ import (
 	"log"
 	"net/http"
 
+	goji "goji.io"
+
 	"goji.io/pat"
 
 	"github.com/alioygur/gores"
@@ -19,8 +21,16 @@ const (
 	gerritAdminPassword = "supersecret"
 )
 
-// CreatePollyOrganization creates an organization in the polly db
-func (s *Server) CreatePollyOrganization(w http.ResponseWriter, r *http.Request) {
+// GerritRoutes returns a goji.Mux that handles routes pertaining to Gerrit config
+func (s *Server) GerritRoutes() *goji.Mux {
+	m := goji.SubMux()
+	m.HandleFunc(pat.Post("/organizations"), s.ImportOrganization)
+	m.HandleFunc(pat.Post("/organizations/:org_name/repositories"), s.ImportRepository)
+	return m
+}
+
+// ImportOrganization creates an organization in the polly db
+func (s *Server) ImportOrganization(w http.ResponseWriter, r *http.Request) {
 	dec := json.NewDecoder(r.Body)
 	org := datastore.Organization{}
 	if err := dec.Decode(&org); err != nil {
@@ -38,8 +48,8 @@ func (s *Server) CreatePollyOrganization(w http.ResponseWriter, r *http.Request)
 	gores.JSON(w, http.StatusOK, org)
 }
 
-// CreatePollyRepository creates a project in the polly db
-func (s *Server) CreatePollyRepository(w http.ResponseWriter, r *http.Request) {
+// ImportRepository creates a project in the polly db
+func (s *Server) ImportRepository(w http.ResponseWriter, r *http.Request) {
 	orgName := pat.Param(r, "org_name")
 	if orgName == "" {
 		handleMissingParam(w, errors.New("org name not specified"))

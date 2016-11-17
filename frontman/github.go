@@ -3,6 +3,8 @@ package main
 import (
 	"net/http"
 
+	goji "goji.io"
+
 	"github.com/alioygur/gores"
 	"github.com/amoghe/polly/frontman/datastore"
 	"github.com/google/go-github/github"
@@ -10,17 +12,24 @@ import (
 	"goji.io/pat"
 )
 
+// GithubRoutes returns a goji.Mux that handles routes pertaining to Github data
+func (s *Server) GithubRoutes() *goji.Mux {
+	m := goji.SubMux()
+	m.HandleFunc(pat.Get("/organizations"), s.ListGithubOrganizations)
+	m.HandleFunc(pat.Get("/organizations/:org_name/repositories"), s.ListGithubRepositoriesForOrganization)
+	return m
+}
+
 // ListGithubOrganizations returns the authenticated users membership
 func (s *Server) ListGithubOrganizations(w http.ResponseWriter, req *http.Request) {
-	sc, err := s.getSessionState(req)
+	client, err := s.githubClientFromSessionState(req)
 	if err != nil {
 		handleSessionExtractError(w, err)
 		return
 	}
 
-	clt := s.newGithubClient(req.Context(), &sc.OAuth2Token)
 	opt := github.ListOrgMembershipsOptions{State: "active"}
-	mems, _, err := clt.Organizations.ListOrgMemberships(&opt)
+	mems, _, err := client.Organizations.ListOrgMemberships(&opt)
 	if err != nil {
 		handleGithubAPIError(w, err)
 		return
@@ -38,12 +47,11 @@ func (s *Server) ListGithubRepositoriesForOrganization(w http.ResponseWriter, re
 		return
 	}
 
-	sc, err := s.getSessionState(req)
+	client, err := s.githubClientFromSessionState(req)
 	if err != nil {
 		handleSessionExtractError(w, err)
 		return
 	}
-	client := s.newGithubClient(req.Context(), &sc.OAuth2Token)
 
 	repos, _, err := client.Repositories.ListByOrg(orgName, nil)
 	if err != nil {
