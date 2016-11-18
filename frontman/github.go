@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"net/http"
 
 	"golang.org/x/oauth2"
@@ -36,7 +37,13 @@ func NewGithubRouter(te TokenExtractor) http.Handler {
 
 // ServeHTTP allows githubRouter to satisfy http.Handler
 func (g *githubRouter) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	g.mux.ServeHTTP(w, r)
+	clt, err := g.githubClientFromRequest(r)
+	if err != nil {
+		handleUnauthorized(w, "couldn't create github client for current user")
+		return
+	}
+	ctx := context.WithValue(r.Context(), "github-client", clt)
+	g.mux.ServeHTTP(w, r.WithContext(ctx))
 }
 
 // return a githubClient from the http request (if its from an authenticated user)
@@ -53,12 +60,8 @@ func (g *githubRouter) githubClientFromRequest(r *http.Request) (*github.Client,
 }
 
 // ListGithubOrganizations returns the authenticated users membership
-func (g *githubRouter) ListGithubOrganizations(w http.ResponseWriter, req *http.Request) {
-	client, err := g.githubClientFromRequest(req)
-	if err != nil {
-		handleSessionExtractError(w, err)
-		return
-	}
+func (g *githubRouter) ListGithubOrganizations(w http.ResponseWriter, r *http.Request) {
+	client := r.Context().Value("github-client").(*github.Client)
 
 	opt := github.ListOrgMembershipsOptions{State: "active"}
 	mems, _, err := client.Organizations.ListOrgMemberships(&opt)
@@ -72,16 +75,12 @@ func (g *githubRouter) ListGithubOrganizations(w http.ResponseWriter, req *http.
 }
 
 // ListGithubRepositoriesForOrganization lists repos for a given org membership
-func (g *githubRouter) ListGithubRepositoriesForOrganization(w http.ResponseWriter, req *http.Request) {
-	orgName := pat.Param(req, "org_name")
+func (g *githubRouter) ListGithubRepositoriesForOrganization(w http.ResponseWriter, r *http.Request) {
+	client := r.Context().Value("github-client").(*github.Client)
+
+	orgName := pat.Param(r, "org_name")
 	if orgName == "" {
 		handleMissingParam(w, errors.New("org name not specified"))
-		return
-	}
-
-	client, err := g.githubClientFromRequest(req)
-	if err != nil {
-		handleSessionExtractError(w, err)
 		return
 	}
 
