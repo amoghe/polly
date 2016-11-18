@@ -41,12 +41,10 @@ type sessionState struct {
 
 // Server represents the server
 type Server struct {
-	githubAppConfig    GithubAppConfig
-	stateCookieMaker   CookieMaker
-	sessionCookieMaker CookieMaker
-	oauth2Config       oauth2.Config
-	db                 *gorm.DB
-	mux                *goji.Mux
+	githubAppConfig GithubAppConfig
+	oauth2Config    oauth2.Config
+	db              *gorm.DB
+	mux             *goji.Mux
 }
 
 // main creates and starts a Server listening.
@@ -100,15 +98,13 @@ func main() {
 }
 
 // NewServer returns a new ServeMux with app routes.
-func NewServer(config *GithubAppConfig, db *gorm.DB) *Server {
+func NewServer(githubCfg *GithubAppConfig, db *gorm.DB) *Server {
 
 	server := &Server{
-		githubAppConfig:    *config,
-		stateCookieMaker:   stateCookieMaker,
-		sessionCookieMaker: sessionCookieMaker,
+		githubAppConfig: *githubCfg,
 		oauth2Config: oauth2.Config{
-			ClientID:     config.GithubClientID,
-			ClientSecret: config.GithubClientSecret,
+			ClientID:     githubCfg.GithubClientID,
+			ClientSecret: githubCfg.GithubClientSecret,
 			RedirectURL:  "http://localhost:8080/auth" + RouteCallback,
 			Endpoint: oauth2.Endpoint{
 				AuthURL:  GithubAuthURL,
@@ -122,9 +118,11 @@ func NewServer(config *GithubAppConfig, db *gorm.DB) *Server {
 		db:  db,
 	}
 
-	server.mux.Handle(pat.New("/auth/*"), server.AuthRoutes())     // Auth routes
-	server.mux.Handle(pat.New("/github/*"), server.GithubRoutes()) // Github API routes
-	server.mux.Handle(pat.New("/gerrit/*"), server.GerritRoutes()) // Gerrit related routes
+	authenticator := NewAuthRouter(server.githubAppConfig, server.oauth2Config)
+
+	server.mux.Handle(pat.New("/auth/*"), authenticator)                                         // Auth routes
+	server.mux.Handle(pat.New("/github/*"), NewGithubRouter(authenticator.AuthTokenFromRequest)) // Github  routes
+	server.mux.Handle(pat.New("/gerrit/*"), NewGerritRouter(db))                                 // Gerrit routes
 	return server
 }
 

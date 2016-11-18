@@ -11,6 +11,7 @@ import (
 
 	"github.com/alioygur/gores"
 	"github.com/amoghe/polly/frontman/datastore"
+	"github.com/jinzhu/gorm"
 	"github.com/pkg/errors"
 )
 
@@ -21,25 +22,43 @@ const (
 	gerritAdminPassword = "supersecret"
 )
 
-// GerritRoutes returns a goji.Mux that handles routes pertaining to Gerrit config
-func (s *Server) GerritRoutes() *goji.Mux {
-	m := goji.SubMux()
-	m.HandleFunc(pat.Post("/organizations"), s.ImportOrganization)
-	m.HandleFunc(pat.Post("/organizations/:org_name/repositories"), s.ImportRepository)
-	return m
+type gerritRouter struct {
+	mux *goji.Mux
+	db  *gorm.DB
+}
+
+// OrganizationExposure is how we expose a github organization
+type OrganizationExposure struct {
+	datastore.Organization
+}
+
+// NewGerritRouter returns a goji.Mux that handles routes pertaining to Gerrit config
+func NewGerritRouter(db *gorm.DB) http.Handler {
+	g := gerritRouter{
+		mux: goji.SubMux(),
+		db:  db,
+	}
+	g.mux.HandleFunc(pat.Post("/organizations"), g.ImportOrganization)
+	g.mux.HandleFunc(pat.Post("/organizations/:org_name/repositories"), g.ImportRepository)
+	return &g
+}
+
+// ServeHTTP allows gerritRouter to satisfy http.Handler
+func (g *gerritRouter) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	g.mux.ServeHTTP(w, r)
 }
 
 // ImportOrganization creates an organization in the polly db
-func (s *Server) ImportOrganization(w http.ResponseWriter, r *http.Request) {
+func (g *gerritRouter) ImportOrganization(w http.ResponseWriter, r *http.Request) {
 	dec := json.NewDecoder(r.Body)
-	org := datastore.Organization{}
+	org := OrganizationExposure{datastore.Organization{}}
 	if err := dec.Decode(&org); err != nil {
 		handleJSONDecodeError(w, errors.Wrap(err, "invalid organization in request body"))
 		return
 	}
 
 	org.Repositories = []datastore.Repository{} // blank out the association field
-	err := datastore.InsertOrganization(s.db, &org)
+	err := datastore.InsertOrganization(g.db, &org.Organization)
 	if err != nil {
 		handleGormError(w, errors.Wrap(err, "failed to insert organization in db"))
 		return
@@ -49,14 +68,14 @@ func (s *Server) ImportOrganization(w http.ResponseWriter, r *http.Request) {
 }
 
 // ImportRepository creates a project in the polly db
-func (s *Server) ImportRepository(w http.ResponseWriter, r *http.Request) {
+func (g *gerritRouter) ImportRepository(w http.ResponseWriter, r *http.Request) {
 	orgName := pat.Param(r, "org_name")
 	if orgName == "" {
 		handleMissingParam(w, errors.New("org name not specified"))
 		return
 	}
 
-	org, err := datastore.GetOrganizationByName(s.db.Debug(), orgName)
+	org, err := datastore.GetOrganizationByName(g.db.Debug(), orgName)
 	if err != nil {
 		handleGormError(w, errors.Wrap(err, "failed to find organization"))
 		return
@@ -68,7 +87,7 @@ func (s *Server) ImportRepository(w http.ResponseWriter, r *http.Request) {
 		handleJSONDecodeError(w, errors.Wrap(err, "invalid repository in request body"))
 		return
 	}
-	if err = datastore.InsertRepository(s.db.Debug(), &rep); err != nil {
+	if err = datastore.InsertRepository(g.db.Debug(), &rep); err != nil {
 		handleGormError(w, errors.Wrap(err, "failed to insert repository in db"))
 		return
 	}

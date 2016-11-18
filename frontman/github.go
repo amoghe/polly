@@ -3,6 +3,8 @@ package main
 import (
 	"net/http"
 
+	"golang.org/x/oauth2"
+
 	goji "goji.io"
 
 	"github.com/alioygur/gores"
@@ -12,17 +14,47 @@ import (
 	"goji.io/pat"
 )
 
-// GithubRoutes returns a goji.Mux that handles routes pertaining to Github data
-func (s *Server) GithubRoutes() *goji.Mux {
-	m := goji.SubMux()
-	m.HandleFunc(pat.Get("/organizations"), s.ListGithubOrganizations)
-	m.HandleFunc(pat.Get("/organizations/:org_name/repositories"), s.ListGithubRepositoriesForOrganization)
-	return m
+// TokenExtractor is a func that can "extract" a oauth2 Token from the http.Request for an authenticated session
+type TokenExtractor func(r *http.Request) (*oauth2.Token, error)
+
+// githubRouter is the mux that handles all github related endpoints
+type githubRouter struct {
+	mux            *goji.Mux
+	tokenExtractor TokenExtractor
+}
+
+// NewGithubRouter returns a mux that is capable of handling all github related routes
+func NewGithubRouter(te TokenExtractor) http.Handler {
+	g := githubRouter{
+		mux:            goji.SubMux(),
+		tokenExtractor: te,
+	}
+	g.mux.HandleFunc(pat.Get("/organizations"), g.ListGithubOrganizations)
+	g.mux.HandleFunc(pat.Get("/organizations/:org_name/repositories"), g.ListGithubRepositoriesForOrganization)
+	return &g
+}
+
+// ServeHTTP allows githubRouter to satisfy http.Handler
+func (g *githubRouter) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	g.mux.ServeHTTP(w, r)
+}
+
+// return a githubClient from the http request (if its from an authenticated user)
+func (g *githubRouter) githubClientFromRequest(r *http.Request) (*github.Client, error) {
+	token, err := g.tokenExtractor(r)
+	if err != nil {
+		return nil, err
+	}
+	tokenSource := oauth2.StaticTokenSource(&oauth2.Token{
+		AccessToken: token.AccessToken,
+	})
+	httpClient := oauth2.NewClient(r.Context(), tokenSource)
+	return github.NewClient(httpClient), nil
 }
 
 // ListGithubOrganizations returns the authenticated users membership
-func (s *Server) ListGithubOrganizations(w http.ResponseWriter, req *http.Request) {
-	client, err := s.githubClientFromSessionState(req)
+func (g *githubRouter) ListGithubOrganizations(w http.ResponseWriter, req *http.Request) {
+	client, err := g.githubClientFromRequest(req)
 	if err != nil {
 		handleSessionExtractError(w, err)
 		return
@@ -40,14 +72,14 @@ func (s *Server) ListGithubOrganizations(w http.ResponseWriter, req *http.Reques
 }
 
 // ListGithubRepositoriesForOrganization lists repos for a given org membership
-func (s *Server) ListGithubRepositoriesForOrganization(w http.ResponseWriter, req *http.Request) {
+func (g *githubRouter) ListGithubRepositoriesForOrganization(w http.ResponseWriter, req *http.Request) {
 	orgName := pat.Param(req, "org_name")
 	if orgName == "" {
 		handleMissingParam(w, errors.New("org name not specified"))
 		return
 	}
 
-	client, err := s.githubClientFromSessionState(req)
+	client, err := g.githubClientFromRequest(req)
 	if err != nil {
 		handleSessionExtractError(w, err)
 		return
