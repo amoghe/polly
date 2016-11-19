@@ -86,6 +86,7 @@ func NewAuthRouter(githubCfg GithubAppConfig) AuthenticatingRouter {
 	a.mux.HandleFunc(pat.Get(RouteCallback), a.HandleCallback)
 	a.mux.HandleFunc(pat.Post(RouteLogout), a.HandleLogout)
 	a.mux.HandleFunc(pat.Get(RouteBackdoor), a.HandleBackdoor)
+	a.mux.HandleFunc(pat.Get(RouteVerify), a.HandleVerify)
 	return &a
 }
 
@@ -218,7 +219,7 @@ func (a *authRouter) HandleBackdoor(w http.ResponseWriter, r *http.Request) {
 
 	state := sessionState{UserID: *usr.ID, OAuth2Token: token}
 	a.setSessionState(w, state)
-	log.Println("[BACKDOOR] Issued session for user:", usr.String())
+	log.Printf("[BACKDOOR] Issued session for user %s (%s)", *usr.Login, *usr.Name)
 }
 
 // HandleVerify verifies whether the token in the session associated with the request is valid
