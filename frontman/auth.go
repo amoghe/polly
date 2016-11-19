@@ -4,13 +4,14 @@ import (
 	"crypto/rand"
 	"encoding/base64"
 	"encoding/json"
-	"errors"
+	"fmt"
 	"log"
 	"net/http"
 
 	"golang.org/x/oauth2"
 
 	"github.com/google/go-github/github"
+	"github.com/pkg/errors"
 
 	goji "goji.io"
 
@@ -33,6 +34,8 @@ const (
 	RouteCallback = "/github/callback"
 	// RouteBackdoor is used to set session cookie for a given PAT
 	RouteBackdoor = "/github/backdoor"
+	// RouteVerify is used to verify the is the token in the session is ok
+	RouteVerify = "/github/verify"
 	// RouteLogout is the route to logout
 	RouteLogout = "/logout"
 )
@@ -218,6 +221,20 @@ func (a *authRouter) HandleBackdoor(w http.ResponseWriter, r *http.Request) {
 	log.Println("[BACKDOOR] Issued session for user:", usr.String())
 }
 
+// HandleVerify verifies whether the token in the session associated with the request is valid
+func (a *authRouter) HandleVerify(w http.ResponseWriter, r *http.Request) {
+	tok, err := a.AuthTokenFromRequest(r)
+	if err != nil {
+		handleUnauthorized(w, "missing auth token or session")
+		return
+	}
+	if _, err = a.VerifyAuthToken(*tok); err != nil {
+		handleUnauthorized(w, fmt.Sprintf("failed to verify token: %s", err.Error()))
+		return
+	}
+	w.WriteHeader(http.StatusOK)
+}
+
 //
 // - - - Helpers - - -
 //
@@ -296,5 +313,17 @@ func (a *authRouter) VerifyAuthToken(tok oauth2.Token) (*github.Authorization, e
 		},
 	})
 	auth, _, err := client.Authorizations.Check(a.githubConfig.GithubClientID, tok.AccessToken)
-	return auth, err
+	if err != nil {
+		return nil, err
+	}
+	scopeSet := map[github.Scope]bool{}
+	for _, scope := range auth.Scopes {
+		scopeSet[scope] = true
+	}
+	for _, scope := range DefaultScopes {
+		if _, there := scopeSet[scope]; !there {
+			return nil, errors.Errorf("missing scope: %s", scope)
+		}
+	}
+	return auth, nil
 }
