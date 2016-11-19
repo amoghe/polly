@@ -22,6 +22,8 @@ var (
 	GithubAuthURL = "https://github.com/login/oauth/authorize"
 	// GithubTokenURL is the URL at which we get the token
 	GithubTokenURL = "https://github.com/login/oauth/access_token"
+	// DefaultScopes represents the minimum scope we need to operate
+	DefaultScopes = []github.Scope{github.ScopeReadPublicKey, github.ScopeReadOrg}
 )
 
 const (
@@ -59,12 +61,16 @@ type authRouter struct {
 
 // NewAuthRouter returns a http.Handler that handles routes pertaining to authentication
 func NewAuthRouter(githubCfg GithubAppConfig) AuthenticatingRouter {
+	scopes := make([]string, len(DefaultScopes))
+	for _, scope := range DefaultScopes {
+		scopes = append(scopes, string(scope))
+	}
 	oauth2Cfg := oauth2.Config{
 		ClientID:     githubCfg.GithubClientID,
 		ClientSecret: githubCfg.GithubClientSecret,
 		RedirectURL:  "http://localhost:8080/auth" + RouteCallback,
 		Endpoint:     oauth2.Endpoint{AuthURL: GithubAuthURL, TokenURL: GithubTokenURL},
-		Scopes:       []string{"read:public_key", "read:org"},
+		Scopes:       scopes,
 	}
 	a := authRouter{
 		mux:                goji.SubMux(),
@@ -76,7 +82,7 @@ func NewAuthRouter(githubCfg GithubAppConfig) AuthenticatingRouter {
 	a.mux.HandleFunc(pat.Get(RouteLogin), a.HandleLogin)
 	a.mux.HandleFunc(pat.Get(RouteCallback), a.HandleCallback)
 	a.mux.HandleFunc(pat.Post(RouteLogout), a.HandleLogout)
-	a.mux.HandleFunc(pat.Post(RouteBackdoor), a.HandleBackdoor)
+	a.mux.HandleFunc(pat.Get(RouteBackdoor), a.HandleBackdoor)
 	return &a
 }
 
@@ -108,13 +114,7 @@ func (a *authRouter) HandleLogin(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	client := github.NewClient(&http.Client{
-		Transport: &github.BasicAuthTransport{
-			Username: a.githubConfig.GithubClientID,
-			Password: a.githubConfig.GithubClientSecret,
-		},
-	})
-	auth, _, err := client.Authorizations.Check(a.githubConfig.GithubClientID, state.OAuth2Token.AccessToken)
+	auth, err := a.VerifyAuthToken(state.OAuth2Token)
 	if err != nil {
 		log.Println("auth check err:", err)
 		http.Redirect(w, r, "/auth"+RouteLogin, http.StatusFound)
@@ -173,29 +173,49 @@ func (a *authRouter) HandleCallback(w http.ResponseWriter, r *http.Request) {
 	http.Redirect(w, r, "/github/organizations", http.StatusFound)
 }
 
-//HandleBackdoor sets the session cookie when provided a legit PAT
+//HandleBackdoor sets the session cookie for the given username+password (provided via BasicAuth)
 func (a *authRouter) HandleBackdoor(w http.ResponseWriter, r *http.Request) {
-	pats, there := r.URL.Query()["pat"]
-	if !there || len(pats) <= 0 {
-		handleMissingParam(w, errors.New("Missing PAT token"))
+	user, pass, ok := r.BasicAuth()
+	if !ok {
+		handleMissingParam(w, errors.New("missing auth credentials"))
 		return
 	}
-	if len(pats[0]) <= 0 {
-		handleMissingParam(w, errors.New("Invalid PAT (zero length)"))
+	if len(user) <= 0 || len(pass) <= 0 {
+		handleMissingParam(w, errors.New("username/password too short"))
 		return
 	}
 
-	token := oauth2.Token{AccessToken: pats[0]}
+	log.Println("[BACKDOOR] Attempting to create authorization for", user, pass)
+	authNote := "polly-backdoor"
+	baTransp := github.BasicAuthTransport{
+		Username: user,
+		Password: pass,
+	}
+	ghClient := github.NewClient(baTransp.Client())
+	auth, _, err := ghClient.Authorizations.Create(&github.AuthorizationRequest{
+		Scopes:       DefaultScopes,
+		Note:         &authNote,
+		ClientID:     &a.githubConfig.GithubClientID,
+		ClientSecret: &a.githubConfig.GithubClientSecret,
+	})
+	if err != nil {
+		log.Println("[BACKDOOR] api error:", err)
+		handleGithubAPIError(w, err)
+		return
+	}
+
+	token := oauth2.Token{AccessToken: *auth.Token}
 	client := github.NewClient(a.oauth2Config.Client(r.Context(), &token))
 	usr, _, err := client.Users.Get("")
 	if err != nil {
+		log.Println("[BACKDOOR] failed to create user obj for", user)
 		handleUnauthorized(w, "failed to get authenticated user with given token")
 		return
 	}
 
 	state := sessionState{UserID: *usr.ID, OAuth2Token: token}
 	a.setSessionState(w, state)
-	log.Println("Issued backdoor session for user:", usr)
+	log.Println("[BACKDOOR] Issued session for user:", usr.String())
 }
 
 //
@@ -265,4 +285,16 @@ func (a *authRouter) AuthTokenFromRequest(r *http.Request) (*oauth2.Token, error
 		return nil, err
 	}
 	return &state.OAuth2Token, nil
+}
+
+// VerifyAuthToken verifies the given OAuth2 token.
+func (a *authRouter) VerifyAuthToken(tok oauth2.Token) (*github.Authorization, error) {
+	client := github.NewClient(&http.Client{
+		Transport: &github.BasicAuthTransport{
+			Username: a.githubConfig.GithubClientID,
+			Password: a.githubConfig.GithubClientSecret,
+		},
+	})
+	auth, _, err := client.Authorizations.Check(a.githubConfig.GithubClientID, tok.AccessToken)
+	return auth, err
 }
