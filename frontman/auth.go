@@ -17,6 +17,13 @@ import (
 	"goji.io/pat"
 )
 
+var (
+	// GithubAuthURL is the endpoints that github exposes for oauth2
+	GithubAuthURL = "https://github.com/login/oauth/authorize"
+	// GithubTokenURL is the URL at which we get the token
+	GithubTokenURL = "https://github.com/login/oauth/access_token"
+)
+
 const (
 	// RouteLogin is used for Github OAuth2 login flow
 	RouteLogin = "/github/login"
@@ -27,6 +34,12 @@ const (
 	// RouteLogout is the route to logout
 	RouteLogout = "/logout"
 )
+
+// GithubAppConfig holds the config for our Github app
+type GithubAppConfig struct {
+	GithubClientID     string
+	GithubClientSecret string
+}
 
 // AuthenticatingRouter is an http.Handler that can additionally return the github.Client for the currently
 // authenticated user (based on the oauth token saved in the session state)
@@ -45,7 +58,14 @@ type authRouter struct {
 }
 
 // NewAuthRouter returns a http.Handler that handles routes pertaining to authentication
-func NewAuthRouter(githubCfg GithubAppConfig, oauth2Cfg oauth2.Config) AuthenticatingRouter {
+func NewAuthRouter(githubCfg GithubAppConfig) AuthenticatingRouter {
+	oauth2Cfg := oauth2.Config{
+		ClientID:     githubCfg.GithubClientID,
+		ClientSecret: githubCfg.GithubClientSecret,
+		RedirectURL:  "http://localhost:8080/auth" + RouteCallback,
+		Endpoint:     oauth2.Endpoint{AuthURL: GithubAuthURL, TokenURL: GithubTokenURL},
+		Scopes:       []string{"read:public_key", "read:org"},
+	}
 	a := authRouter{
 		mux:                goji.SubMux(),
 		githubConfig:       githubCfg,
@@ -63,6 +83,12 @@ func NewAuthRouter(githubCfg GithubAppConfig, oauth2Cfg oauth2.Config) Authentic
 // ServeHTTP allows authRouter satisfy the http.Handler interface
 func (a *authRouter) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	a.mux.ServeHTTP(w, r)
+}
+
+// sessionState is what we store in the session to keep track of the user
+type sessionState struct {
+	UserID      int
+	OAuth2Token oauth2.Token
 }
 
 // HandleLogout destroys the session on POSTs and redirects to home.
