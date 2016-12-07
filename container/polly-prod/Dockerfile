@@ -1,27 +1,24 @@
 FROM polly-base:latest
 
-# Ensure users
 RUN useradd -s /bin/bash -u 1000 --create-home admin
-RUN useradd -s /bin/bash -u 1001 --create-home gerrit   --groups admin
 RUN useradd -s /bin/bash -u 1002 --create-home frontman --groups admin
+RUN useradd -s /bin/bash -u 1001 --create-home gerrit   --groups admin
 
-# setup admin user ssh keys
-USER admin
-WORKDIR /home/admin
-RUN mkdir .ssh && ssh-keygen -t rsa -N '' -f .ssh/id_rsa
+# Copy in the rootfs files, fix the perms
+COPY    rootfs/ /
+RUN     chown -R admin    /home/admin
+RUN     chown -R frontman /home/frontman
+RUN     chown -R gerrit   /home/gerrit
 
-# Copy in frontman files
-USER    frontman
-WORKDIR /home/frontman
-COPY    rootfs/home/frontman ./
+# setup admin user (and ssh keys)
+USER     admin
+WORKDIR  /home/admin
+RUN      mkdir .ssh && ssh-keygen -t rsa -N '' -f .ssh/id_rsa
 
-# Copy in gerrit files
+# setup gerrit user (and files)
 USER    gerrit
 WORKDIR /home/gerrit
-COPY    rootfs/home/gerrit/ ./
-
-# Download gerrit
-RUN wget https://www.gerritcodereview.com/download/gerrit-2.12.3.war -q
+RUN     wget https://www.gerritcodereview.com/download/gerrit-2.12.3.war -q
 
 #
 # Initialize gerrit (DEV)
@@ -63,3 +60,7 @@ RUN cd site && java -jar bin/gerrit.war reindex
 RUN  rm -rf site/etc/ssh_host_key
 # Delete seeds
 RUN rm -rf seed
+
+
+USER root
+CMD  ["/sbin/my_init"]
