@@ -28,38 +28,49 @@ type Server struct {
 	mux *goji.Mux
 }
 
+// returns the first non empty string in the specfied array, fatals if all are empty
+func oneOfOrDie(opts []string) string {
+	for _, s := range opts {
+		if s != "" {
+			return s
+		}
+	}
+	log.Fatal("Missing param")
+	return ""
+}
+
 // main creates and starts a Server listening.
 func main() {
 	var (
 		listenAddress = "0.0.0.0:8080"
-		config        = GithubAppConfig{
-			GithubOrgName:      "",
-			GithubClientID:     os.Getenv("GITHUB_CLIENT_ID"),
-			GithubClientSecret: os.Getenv("GITHUB_CLIENT_SECRET"),
-		}
+		// github
 		clientID     = flag.String("client-id", "", "Github Client ID")
 		clientSecret = flag.String("client-secret", "", "Github Client Secret")
-		dbType       = flag.String("db-type", "sqlite3", "Type of database")
-		dbDSN        = flag.String("db-dsn", "/tmp/polly", "Database DSN")
-		orgName      = flag.String("gh-org-name", "", "Github org  name")
+		// database
+		dbType  = flag.String("db-type", "sqlite3", "Type of database")
+		dbDSN   = flag.String("db-dsn", "/tmp/polly", "Database DSN")
+		orgName = flag.String("github-org-name", "", "Github org  name")
+		// gerrit
+		gerritAddr      = flag.String("gerrit-addr", "localhost:10080", "Address of gerrit server")
+		gerritAdminUser = flag.String("gerrit-admin-user", "admin", "Admin user (gerrit)")
+		gerritAdminPass = flag.String("gerrit-admin-pass", "supersecret", "Admin pass (gerrit)")
+		// cfg structs
+		githubConfig = GithubAppConfig{
+			GithubClientID:     oneOfOrDie([]string{*clientID, os.Getenv("GITHUB_CLIENT_ID")}),
+			GithubClientSecret: oneOfOrDie([]string{*clientSecret, os.Getenv("GITHUB_CLIENT_SECRET")}),
+		}
+		gerritConfig = gerritConfig{
+			Addr:     *gerritAddr,
+			Username: *gerritAdminUser,
+			Password: *gerritAdminPass,
+		}
 	)
+
 	// allow consumer credential flags to override config fields
 	flag.Parse()
 
 	if len(*orgName) <= 0 {
 		log.Fatal("Missing Github org name")
-	}
-	if *clientID != "" {
-		config.GithubClientID = *clientID
-	}
-	if *clientSecret != "" {
-		config.GithubClientSecret = *clientSecret
-	}
-	if config.GithubClientID == "" {
-		log.Fatal("Missing Github Client ID")
-	}
-	if config.GithubClientSecret == "" {
-		log.Fatal("Missing Github Client Secret")
 	}
 
 	log.Println("Connecting to db", *dbType, "at", *dbDSN)
@@ -74,7 +85,7 @@ func main() {
 	}
 
 	log.Println("Starting Server listening on:", listenAddress)
-	err = http.ListenAndServe(listenAddress, NewServer(config, db))
+	err = http.ListenAndServe(listenAddress, NewServer(githubConfig, gerritConfig, db))
 	if err != nil {
 		log.Fatal("ListenAndServe: ", err)
 	}
@@ -83,12 +94,12 @@ func main() {
 }
 
 // NewServer returns a new ServeMux with app routes.
-func NewServer(githubCfg GithubAppConfig, db *gorm.DB) *Server {
+func NewServer(githubCfg GithubAppConfig, gerritCfg gerritConfig, db *gorm.DB) *Server {
 	var (
 		mux          = goji.NewMux()
 		authRouter   = NewAuthRouter(githubCfg)
 		githubRouter = NewGithubRouter(authRouter.AuthTokenFromRequest)
-		gerritRouter = NewGerritRouter(db, authRouter.AuthTokenFromRequest)
+		gerritRouter = NewGerritRouter(db, gerritCfg, authRouter.AuthTokenFromRequest)
 	)
 
 	mux.Handle(pat.New("/auth/*"), authRouter)     // Auth routes
