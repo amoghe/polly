@@ -42,6 +42,7 @@ const (
 
 // GithubAppConfig holds the config for our Github app
 type GithubAppConfig struct {
+	GithubOrgName      string
 	GithubClientID     string
 	GithubClientSecret string
 }
@@ -114,22 +115,23 @@ func (a *authRouter) HandleLogin(w http.ResponseWriter, r *http.Request) {
 
 	state, err := a.getSessionState(r)
 	if err != nil {
-		http.Redirect(w, r, "/auth"+RouteLogin, http.StatusFound)
+		randomState := a.setRandomState(w)
+		http.Redirect(w, r, a.oauth2Config.AuthCodeURL(randomState), http.StatusFound)
 		return
 	}
 
 	auth, err := a.VerifyAuthToken(state.OAuth2Token)
 	if err != nil {
-		log.Println("auth check err:", err)
-		http.Redirect(w, r, "/auth"+RouteLogin, http.StatusFound)
+		randomState := a.setRandomState(w)
+		http.Redirect(w, r, a.oauth2Config.AuthCodeURL(randomState), http.StatusFound)
 		return
 	}
 	log.Println("auth is:", auth)
 
 	// TODO: check auth.Scopes for sufficient permissions
 
-	randomState := a.setRandomState(w)
-	http.Redirect(w, r, a.oauth2Config.AuthCodeURL(randomState), http.StatusFound)
+	// TODO: where to redirect when user is already authenticated?
+	http.Redirect(w, r, "/", http.StatusFound)
 }
 
 // HandleCallback handles the outh callback
@@ -189,7 +191,7 @@ func (a *authRouter) HandleBackdoor(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	log.Println("[BACKDOOR] Attempting to create authorization for", user, pass)
+	log.Println("[BACKDOOR] Attempting to create authorization for", user)
 	authNote := "polly-backdoor"
 	baTransp := github.BasicAuthTransport{
 		Username: user,
@@ -229,10 +231,12 @@ func (a *authRouter) HandleVerify(w http.ResponseWriter, r *http.Request) {
 		handleUnauthorized(w, "missing auth token or session")
 		return
 	}
-	if _, err = a.VerifyAuthToken(*tok); err != nil {
+	auth, err := a.VerifyAuthToken(*tok)
+	if err != nil {
 		handleUnauthorized(w, fmt.Sprintf("failed to verify token: %s", err.Error()))
 		return
 	}
+	log.Println("[BACKDOOR] verified token (last 8)", *auth.TokenLastEight)
 	w.WriteHeader(http.StatusOK)
 }
 
