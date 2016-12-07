@@ -29,13 +29,19 @@ type gerritRouter struct {
 	tokenExtractor TokenExtractor
 }
 
+type gerritConfig struct {
+	Addr     string
+	Username string
+	Password string
+}
+
 // OrganizationExposure is how we expose a github organization
 type OrganizationExposure struct {
 	datastore.Organization
 }
 
 // NewGerritRouter returns a goji.Mux that handles routes pertaining to Gerrit config
-func NewGerritRouter(db *gorm.DB, te TokenExtractor) http.Handler {
+func NewGerritRouter(db *gorm.DB, cfg gerritConfig, te TokenExtractor) http.Handler {
 	g := gerritRouter{
 		mux:            goji.SubMux(),
 		db:             db,
