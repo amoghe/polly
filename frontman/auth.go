@@ -40,11 +40,11 @@ const (
 	RouteLogout = "/logout"
 )
 
-// GithubAppConfig holds the config for our Github app
-type GithubAppConfig struct {
-	GithubOrgName      string
-	GithubClientID     string
-	GithubClientSecret string
+// GithubConfig holds the config for our Github app
+type GithubConfig struct {
+	OrgName  string
+	ClientID string
+	Secret   string
 }
 
 // AuthenticatingRouter is an http.Handler that can additionally return the github.Client for the currently
@@ -58,20 +58,20 @@ type AuthenticatingRouter interface {
 type authRouter struct {
 	mux                *goji.Mux
 	oauth2Config       oauth2.Config
-	githubConfig       GithubAppConfig
+	githubConfig       GithubConfig
 	stateCookieMaker   CookieMaker
 	sessionCookieMaker CookieMaker
 }
 
 // NewAuthRouter returns a http.Handler that handles routes pertaining to authentication
-func NewAuthRouter(githubCfg GithubAppConfig) AuthenticatingRouter {
+func NewAuthRouter(githubCfg GithubConfig) AuthenticatingRouter {
 	scopes := make([]string, len(DefaultScopes))
 	for _, scope := range DefaultScopes {
 		scopes = append(scopes, string(scope))
 	}
 	oauth2Cfg := oauth2.Config{
-		ClientID:     githubCfg.GithubClientID,
-		ClientSecret: githubCfg.GithubClientSecret,
+		ClientID:     githubCfg.ClientID,
+		ClientSecret: githubCfg.Secret,
 		RedirectURL:  "http://localhost:8080/auth" + RouteCallback,
 		Endpoint:     oauth2.Endpoint{AuthURL: GithubAuthURL, TokenURL: GithubTokenURL},
 		Scopes:       scopes,
@@ -201,8 +201,8 @@ func (a *authRouter) HandleBackdoor(w http.ResponseWriter, r *http.Request) {
 	auth, _, err := ghClient.Authorizations.Create(&github.AuthorizationRequest{
 		Scopes:       DefaultScopes,
 		Note:         &authNote,
-		ClientID:     &a.githubConfig.GithubClientID,
-		ClientSecret: &a.githubConfig.GithubClientSecret,
+		ClientID:     &a.githubConfig.ClientID,
+		ClientSecret: &a.githubConfig.Secret,
 	})
 	if err != nil {
 		log.Println("[BACKDOOR] api error:", err)
@@ -313,11 +313,11 @@ func (a *authRouter) AuthTokenFromRequest(r *http.Request) (*oauth2.Token, error
 func (a *authRouter) VerifyAuthToken(tok oauth2.Token) (*github.Authorization, error) {
 	client := github.NewClient(&http.Client{
 		Transport: &github.BasicAuthTransport{
-			Username: a.githubConfig.GithubClientID,
-			Password: a.githubConfig.GithubClientSecret,
+			Username: a.githubConfig.ClientID,
+			Password: a.githubConfig.Secret,
 		},
 	})
-	auth, _, err := client.Authorizations.Check(a.githubConfig.GithubClientID, tok.AccessToken)
+	auth, _, err := client.Authorizations.Check(a.githubConfig.ClientID, tok.AccessToken)
 	if err != nil {
 		return nil, err
 	}

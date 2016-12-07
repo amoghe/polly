@@ -28,17 +28,6 @@ type Server struct {
 	mux *goji.Mux
 }
 
-// returns the first non empty string in the specfied array, fatals if all are empty
-func oneOfOrDie(opts []string) string {
-	for _, s := range opts {
-		if s != "" {
-			return s
-		}
-	}
-	log.Fatal("Missing param")
-	return ""
-}
-
 // main creates and starts a Server listening.
 func main() {
 	var (
@@ -55,15 +44,7 @@ func main() {
 		gerritAdminUser = flag.String("gerrit-admin-user", "admin", "Admin user (gerrit)")
 		gerritAdminPass = flag.String("gerrit-admin-pass", "supersecret", "Admin pass (gerrit)")
 		// cfg structs
-		githubConfig = GithubAppConfig{
-			GithubClientID:     oneOfOrDie([]string{*clientID, os.Getenv("GITHUB_CLIENT_ID")}),
-			GithubClientSecret: oneOfOrDie([]string{*clientSecret, os.Getenv("GITHUB_CLIENT_SECRET")}),
-		}
-		gerritConfig = gerritConfig{
-			Addr:     *gerritAddr,
-			Username: *gerritAdminUser,
-			Password: *gerritAdminPass,
-		}
+
 	)
 
 	// allow consumer credential flags to override config fields
@@ -78,14 +59,35 @@ func main() {
 	if err != nil {
 		log.Fatal("Failed to open db handle: ", err)
 	}
-
 	err = datastore.MigrateDatabase(db)
 	if err != nil {
 		log.Fatal("Failed to migrate db: ", err)
 	}
 
+	firstNonZero := func(opts []string) string {
+		for _, s := range opts {
+			if s != "" {
+				return s
+			}
+		}
+		log.Fatal("Missing param")
+		return ""
+	}
+
+	srv := NewServer(
+		GithubConfig{
+			OrgName:  firstNonZero([]string{*orgName}),
+			ClientID: firstNonZero([]string{*clientID, os.Getenv("GITHUB_CLIENT_ID")}),
+			Secret:   firstNonZero([]string{*clientSecret, os.Getenv("GITHUB_CLIENT_SECRET")}),
+		},
+		GerritConfig{
+			Addr:     firstNonZero([]string{*gerritAddr}),
+			Username: firstNonZero([]string{*gerritAdminUser}),
+			Password: firstNonZero([]string{*gerritAdminPass}),
+		},
+		db)
 	log.Println("Starting Server listening on:", listenAddress)
-	err = http.ListenAndServe(listenAddress, NewServer(githubConfig, gerritConfig, db))
+	err = http.ListenAndServe(listenAddress, srv)
 	if err != nil {
 		log.Fatal("ListenAndServe: ", err)
 	}
@@ -94,7 +96,7 @@ func main() {
 }
 
 // NewServer returns a new ServeMux with app routes.
-func NewServer(githubCfg GithubAppConfig, gerritCfg gerritConfig, db *gorm.DB) *Server {
+func NewServer(githubCfg GithubConfig, gerritCfg GerritConfig, db *gorm.DB) *Server {
 	var (
 		mux          = goji.NewMux()
 		authRouter   = NewAuthRouter(githubCfg)
@@ -103,7 +105,7 @@ func NewServer(githubCfg GithubAppConfig, gerritCfg gerritConfig, db *gorm.DB) *
 	)
 
 	mux.Handle(pat.New("/auth/*"), authRouter)     // Auth routes
-	mux.Handle(pat.New("/github/*"), githubRouter) // Github  routes
+	mux.Handle(pat.New("/github/*"), githubRouter) // Github routes
 	mux.Handle(pat.New("/gerrit/*"), gerritRouter) // Gerrit routes
 
 	return &Server{

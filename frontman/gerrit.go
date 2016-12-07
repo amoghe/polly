@@ -29,7 +29,7 @@ type gerritRouter struct {
 	tokenExtractor TokenExtractor
 }
 
-type gerritConfig struct {
+type GerritConfig struct {
 	Addr     string
 	Username string
 	Password string
@@ -41,7 +41,7 @@ type OrganizationExposure struct {
 }
 
 // NewGerritRouter returns a goji.Mux that handles routes pertaining to Gerrit config
-func NewGerritRouter(db *gorm.DB, cfg gerritConfig, te TokenExtractor) http.Handler {
+func NewGerritRouter(db *gorm.DB, cfg GerritConfig, te TokenExtractor) http.Handler {
 	g := gerritRouter{
 		mux:            goji.SubMux(),
 		db:             db,
