@@ -11,5 +11,6 @@ func OpenDatabase(dbtype, dsn string) (*gorm.DB, error) {
 func MigrateDatabase(db *gorm.DB) error {
 	return db.AutoMigrate(&User{},
 		&Organization{},
-		&Repository{}).Error
+		&Repository{},
+		&Server{}).Error
 }
