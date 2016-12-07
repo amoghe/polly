@@ -16,19 +16,14 @@ import (
 	"github.com/pkg/errors"
 )
 
-const (
-	localGerritURL = "http://127.0.0.1:10080"
-
-	gerritAdminUsername = "admin"
-	gerritAdminPassword = "supersecret"
-)
-
 type gerritRouter struct {
+	cfg            GerritConfig
 	mux            *goji.Mux
 	db             *gorm.DB
 	tokenExtractor TokenExtractor
 }
 
+// GerritConfig holds the settings of the backing gerrit server
 type GerritConfig struct {
 	Addr     string
 	Username string
@@ -43,6 +38,7 @@ type OrganizationExposure struct {
 // NewGerritRouter returns a goji.Mux that handles routes pertaining to Gerrit config
 func NewGerritRouter(db *gorm.DB, cfg GerritConfig, te TokenExtractor) http.Handler {
 	g := gerritRouter{
+		cfg:            cfg,
 		mux:            goji.SubMux(),
 		db:             db,
 		tokenExtractor: te,
@@ -114,12 +110,12 @@ func (g *gerritRouter) ImportRepository(w http.ResponseWriter, r *http.Request) 
 	}
 
 	log.Println("Setting up gerrit server")
-	gclt, err := gerrit.NewClient(localGerritURL, nil)
+	gclt, err := gerrit.NewClient(g.cfg.Addr, nil)
 	if err != nil {
 		handleGerritAPIError(w, errors.Wrap(err, "failed to setup client to gerrit server"))
 		return
 	}
-	gclt.Authentication.SetDigestAuth(gerritAdminUsername, gerritAdminPassword)
+	gclt.Authentication.SetDigestAuth(g.cfg.Username, g.cfg.Password)
 
 	proj, resp, err := gclt.Projects.CreateProject(rep.Name, &gerrit.ProjectInput{
 		Name:              rep.Name,
