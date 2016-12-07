@@ -32,8 +32,8 @@ type Server struct {
 func main() {
 	var (
 		listenAddress = "0.0.0.0:8080"
-
-		config = GithubAppConfig{
+		config        = GithubAppConfig{
+			GithubOrgName:      "",
 			GithubClientID:     os.Getenv("GITHUB_CLIENT_ID"),
 			GithubClientSecret: os.Getenv("GITHUB_CLIENT_SECRET"),
 		}
@@ -41,10 +41,14 @@ func main() {
 		clientSecret = flag.String("client-secret", "", "Github Client Secret")
 		dbType       = flag.String("db-type", "sqlite3", "Type of database")
 		dbDSN        = flag.String("db-dsn", "/tmp/polly", "Database DSN")
+		orgName      = flag.String("gh-org-name", "", "Github org  name")
 	)
 	// allow consumer credential flags to override config fields
 	flag.Parse()
 
+	if len(*orgName) <= 0 {
+		log.Fatal("Missing Github org name")
+	}
 	if *clientID != "" {
 		config.GithubClientID = *clientID
 	}
@@ -84,7 +88,7 @@ func NewServer(githubCfg GithubAppConfig, db *gorm.DB) *Server {
 		mux          = goji.NewMux()
 		authRouter   = NewAuthRouter(githubCfg)
 		githubRouter = NewGithubRouter(authRouter.AuthTokenFromRequest)
-		gerritRouter = NewGerritRouter(db)
+		gerritRouter = NewGerritRouter(db, authRouter.AuthTokenFromRequest)
 	)
 
 	mux.Handle(pat.New("/auth/*"), authRouter)     // Auth routes
