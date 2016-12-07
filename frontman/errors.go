@@ -57,6 +57,10 @@ func handleGithubAPIError(w http.ResponseWriter, err error) {
 	gores.JSON(w, retcode, struct{ Error string }{Error: retmesg})
 }
 
+func handleGerritAPIError(w http.ResponseWriter, err error) {
+	gores.JSON(w, http.StatusBadGateway, struct{ Error string }{Error: err.Error()})
+}
+
 // private
 func _handleError(w http.ResponseWriter, err error) {
 	log.Printf("ERR: (%T) %s\n", err, err)
