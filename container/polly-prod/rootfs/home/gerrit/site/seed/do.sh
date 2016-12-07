@@ -63,11 +63,12 @@ function main() {
     echo "Adding team (members) group"
     PUT_api_call "team-members.group.json" "groups/team-members"
 
-    echo "Changing admin password"
-    PUT_api_call "admin.password.json" "accounts/self/password.http"
-
     echo "Adding ssh keys for admin"
     POST_api_call "/home/admin/.ssh/id_rsa.pub" "accounts/self/sshkeys"
+
+    # do this last, since all ops are using the default password
+    echo "Changing admin password"
+    PUT_api_call "admin.password.json" "accounts/self/password.http"
 }
 
 #
