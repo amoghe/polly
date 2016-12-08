@@ -98,7 +98,7 @@ func (a *authRouter) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 // sessionState is what we store in the session to keep track of the user
 type sessionState struct {
-	UserID      int
+	//UserID      int
 	OAuth2Token oauth2.Token
 }
 
@@ -165,14 +165,13 @@ func (a *authRouter) HandleCallback(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	client := github.NewClient(a.oauth2Config.Client(r.Context(), token))
-	usr, _, err := client.Users.Get("")
+	_, err = a.VerifyAuthToken(*token)
 	if err != nil {
-		handleUnauthorized(w, "failed to get authenticated user")
+		handleUnauthorized(w, err.Error())
 		return
 	}
 
-	state := sessionState{UserID: *usr.ID, OAuth2Token: *token}
+	state := sessionState{OAuth2Token: *token}
 	a.setSessionState(w, state)
 
 	// TODO: send them to their "homepage"
@@ -211,17 +210,16 @@ func (a *authRouter) HandleBackdoor(w http.ResponseWriter, r *http.Request) {
 	}
 
 	token := oauth2.Token{AccessToken: *auth.Token}
-	client := github.NewClient(a.oauth2Config.Client(r.Context(), &token))
-	usr, _, err := client.Users.Get("")
+	_, err = a.VerifyAuthToken(token)
 	if err != nil {
-		log.Println("[BACKDOOR] failed to create user obj for", user)
-		handleUnauthorized(w, "failed to get authenticated user with given token")
+		log.Println("[BACKDOOR] token verification error:", err)
+		handleGithubAPIError(w, err)
 		return
 	}
 
-	state := sessionState{UserID: *usr.ID, OAuth2Token: token}
+	state := sessionState{OAuth2Token: token}
 	a.setSessionState(w, state)
-	log.Printf("[BACKDOOR] Issued session for user %s (%s)", *usr.Login, *usr.Name)
+	log.Printf("[BACKDOOR] Issued session for user %s", user)
 }
 
 // HandleVerify verifies whether the token in the session associated with the request is valid
@@ -311,6 +309,7 @@ func (a *authRouter) AuthTokenFromRequest(r *http.Request) (*oauth2.Token, error
 
 // VerifyAuthToken verifies the given OAuth2 token.
 func (a *authRouter) VerifyAuthToken(tok oauth2.Token) (*github.Authorization, error) {
+	// Use the app creds to verify that the token is valid and has the needed scopes
 	client := github.NewClient(&http.Client{
 		Transport: &github.BasicAuthTransport{
 			Username: a.githubConfig.ClientID,
@@ -327,8 +326,21 @@ func (a *authRouter) VerifyAuthToken(tok oauth2.Token) (*github.Authorization, e
 	}
 	for _, scope := range DefaultScopes {
 		if _, there := scopeSet[scope]; !there {
-			return nil, errors.Errorf("missing scope: %s", scope)
+			return nil, errors.Errorf("auth token is missing scope: %s", scope)
 		}
 	}
+
+	// Now use a new client (using users the token) to check membership to the org
+	tc := oauth2.NewClient(oauth2.NoContext, oauth2.StaticTokenSource(&oauth2.Token{AccessToken: tok.AccessToken}))
+	client = github.NewClient(tc)
+	mem, _, err := client.Organizations.GetOrgMembership("", a.githubConfig.OrgName)
+	if err != nil {
+		return nil, err
+	}
+	log.Println("mem:", mem)
+	if *mem.State != "active" {
+		return nil, errors.New("not an active member of organization")
+	}
+
 	return auth, nil
 }
